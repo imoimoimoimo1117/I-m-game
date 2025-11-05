@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ローカル鬼ごっこ（4ラウンド制）</title>
+  <style>
+    :root{--bg:#0b1223;--arena:#e6f0ff;--p1:#ff4d4d;--p2:#4da6ff;--it:#ffd54d}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Hiragino Kaku Gothic ProN',Meiryo,Arial;color:#fff;background:var(--bg);display:flex;align-items:center;justify-content:center;height:100vh}
+    .wrap{width:100%;max-width:900px;padding:18px;box-sizing:border-box}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+    h1{font-size:18px;margin:0}
+    .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    button{padding:8px 12px;border-radius:8px;border:0;background:#1f2937;color:#fff;cursor:pointer}
+    button:active{transform:translateY(1px)}
+    input{padding:6px 8px;border-radius:6px;border:1px solid #555;background:#111;color:#fff;width:120px}
+    .info{font-size:13px;color:#cbd5e1}
+    canvas{display:block;border-radius:10px;width:100%;background:var(--arena);box-shadow:0 6px 18px rgba(0,0,0,.4)}
+    .hud{display:flex;justify-content:space-between;margin-top:8px;color:#e6eef8}
+    .hud > div{font-size:14px}
+    .small{font-size:12px;color:#cbd5e1}
+    footer{margin-top:8px;font-size:12px;color:#cbd5e1}
+    .legend{display:flex;gap:12px;align-items:center}
+    .dot{width:12px;height:12px;border-radius:50%}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>ローカル鬼ごっこ（4ラウンド制）</h1>
+      <div class="controls">
+        <div>
+          P1名: <input id="name1" placeholder="Player 1" />
+          P2名: <input id="name2" placeholder="Player 2" />
+        </div>
+        <button id="startBtn">スタート</button>
+        <button id="resetBtn">リセット</button>
+        <div class="info small">Player1: W A S D ▶ Player2: ↑ ← ↓ →（スペースでもスタート）</div>
+      </div>
+    </header>
+
+    <canvas id="arena" width="800" height="480"></canvas>
+
+    <div class="hud">
+      <div>Round: <span id="round">1</span> / 4</div>
+      <div>Time: <span id="time">20</span>s</div>
+      <div>おに: <span id="oniName">Player 1</span></div>
+      <div>スコア — <span id="p1Label">P1</span>: <span id="score1">0</span> | <span id="p2Label">P2</span>: <span id="score2">0</span></div>
+    </div>
+
+    <footer>
+      <div class="legend">
+        <div style="display:flex;gap:6px;align-items:center"><span class="dot" style="background:var(--p1)"></span>Player 1</div>
+        <div style="display:flex;gap:6px;align-items:center"><span class="dot" style="background:var(--p2)"></span>Player 2</div>
+        <div style="display:flex;gap:6px;align-items:center"><span class="dot" style="background:var(--it)"></span>おに</div>
+      </div>
+      <div class="small" style="margin-top:6px">4ラウンド制。各ラウンド20秒。障害物に当たると止まります。</div>
+    </footer>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('arena');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+
+    const startBtn = document.getElementById('startBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const name1 = document.getElementById('name1');
+    const name2 = document.getElementById('name2');
+    const timeEl = document.getElementById('time');
+    const oniNameEl = document.getElementById('oniName');
+    const score1El = document.getElementById('score1');
+    const score2El = document.getElementById('score2');
+    const roundEl = document.getElementById('round');
+    const p1Label = document.getElementById('p1Label');
+    const p2Label = document.getElementById('p2Label');
+
+    const TOTAL_ROUNDS = 4;
+    const ROUND_SECONDS = 20;
+    const PLAYER_RADIUS = 14; // 少し小さく
+    const SPEED = 3.5;
+
+    let keys = {};
+    window.addEventListener('keydown', e=>{ keys[e.key] = true; if(e.key===" ") startRound(); });
+    window.addEventListener('keyup', e=>{ keys[e.key] = false; });
+
+    function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+
+    class Player{
+      constructor(x,y,color){ this.x=x; this.y=y; this.color=color; this.vx=0; this.vy=0; this.score=0; }
+      draw(isOni=false, label=""){ ctx.beginPath(); ctx.arc(this.x,this.y,PLAYER_RADIUS,0,Math.PI*2); ctx.fillStyle = isOni? getComputedStyle(document.documentElement).getPropertyValue('--it') : this.color; ctx.fill(); ctx.closePath(); ctx.fillStyle="#000"; ctx.font="bold 12px sans-serif"; ctx.textAlign="center"; ctx.fillText(isOni?"鬼":label,this.x,this.y+4); }
+      update(){ this.x = clamp(this.x+this.vx, PLAYER_RADIUS, W-PLAYER_RADIUS); this.y = clamp(this.y+this.vy, PLAYER_RADIUS, H-PLAYER_RADIUS); }
+    }
+
+    const p1 = new Player(100, H/2, getComputedStyle(document.documentElement).getPropertyValue('--p1'));
+    const p2 = new Player(W-100, H/2, getComputedStyle(document.documentElement).getPropertyValue('--p2'));
+
+    let obstacles = [];
+    function generateObstacles(){
+      obstacles = [];
+      for(let i=0;i<6;i++){
+        const ow = 80 + Math.random()*50;
+        const oh = 30 + Math.random()*50;
+        const ox = 80 + Math.random()*(W-160-ow);
+        const oy = 60 + Math.random()*(H-120-oh);
+        obstacles.push({x:ox,y:oy,w:ow,h:oh});
+      }
+    }
+
+    let oni = 1;
+    let running=false;
+    let remaining = ROUND_SECONDS;
+    let lastTime = null;
+    let round = 1;
+
+    function resetPositions(){ p1.x=100; p1.y=H/2; p2.x=W-100; p2.y=H/2; p1.vx=p1.vy=p2.vx=p2.vy=0; }
+
+    function startRound(){
+      if(running) return;
+      if(round > TOTAL_ROUNDS){
+        alert('ゲーム終了！最終スコア\n'+p1Label.textContent+': '+p1.score+'点\n'+p2Label.textContent+': '+p2.score+'点');
+        return;
+      }
+      p1Label.textContent = name1.value || 'P1';
+      p2Label.textContent = name2.value || 'P2';
+      resetPositions();
+      generateObstacles(); // ラウンドごとにランダム配置
+      remaining = ROUND_SECONDS;
+      running = true;
+      lastTime = performance.now();
+      startBtn.disabled = true;
+      startBtn.textContent='プレイ中';
+      oniNameEl.textContent = oni===1? p1Label.textContent : p2Label.textContent;
+      roundEl.textContent = round;
+    }
+
+    function endRound(){
+      running=false;
+      startBtn.disabled=false;
+      startBtn.textContent='スタート';
+      if(oni===1) p2.score++; else p1.score++;
+      score1El.textContent = p1.score;
+      score2El.textContent = p2.score;
+      oni = oni===1?2:1;
+      oniNameEl.textContent = oni===1? p1Label.textContent : p2Label.textContent;
+      round++;
+      if(round > TOTAL_ROUNDS){
+        alert('全4ラウンド終了！\n最終スコア\n'+p1Label.textContent+': '+p1.score+'点\n'+p2Label.textContent+': '+p2.score+'点');
+        startBtn.disabled=true;
+      }
+    }
+
+    function checkCollision(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return (dx*dx+dy*dy) <= ((PLAYER_RADIUS*2)*(PLAYER_RADIUS*2)); }
+
+    function collidesWithObstacle(p){ for(const o of obstacles){ if(p.x+PLAYER_RADIUS>o.x && p.x-PLAYER_RADIUS<o.x+o.w && p.y+PLAYER_RADIUS>o.y && p.y-PLAYER_RADIUS<o.y+o.h) return true; } return false; }
+
+    function update(dt){
+      p1.vx = p1.vy = 0;
+      if(keys['w']||keys['W']) p1.vy=-SPEED;
+      if(keys['s']||keys['S']) p1.vy=SPEED;
+      if(keys['a']||keys['A']) p1.vx=-SPEED;
+      if(keys['d']||keys['D']) p1.vx=SPEED;
+      p2.vx = p2.vy = 0;
+      if(keys['ArrowUp']) p2.vy=-SPEED;
+      if(keys['ArrowDown']) p2.vy=SPEED;
+      if(keys['ArrowLeft']) p2.vx=-SPEED;
+      if(keys['ArrowRight']) p2.vx=SPEED;
+      const prev1={x:p1.x,y:p1.y}, prev2={x:p2.x,y:p2.y};
+      p1.update(); p2.update();
+      if(collidesWithObstacle(p1)){ p1.x=prev1.x; p1.y=prev1.y; }
+      if(collidesWithObstacle(p2)){ p2.x=prev2.x; p2.y=prev2.y; }
+
+      const oniPlayer = (oni===1)?p1:p2; const other = (oni===1)?p2:p1;
+      if(checkCollision(oniPlayer, other)) endRound();
+      if(running){ remaining -= dt/1000; timeEl.textContent = Math.max(0, Math.ceil(remaining)); if(remaining<=0) endRound(); }
+    }
+
+    function draw(){
+      ctx.clearRect(0,0,W,H);
+      ctx.save(); ctx.globalAlpha=0.08;
+      for(let x=0;x<W;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.strokeStyle='#000';ctx.stroke();}
+      for(let y=0;y<H;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+      ctx.restore();
+      ctx.fillStyle='#99a'; for(const o of obstacles){ ctx.fillRect(o.x,o.y,o.w,o.h); }
+      const isOni1=(oni===1);
+      p1.draw(isOni1,p1Label.textContent);
+      p2.draw(!isOni1,p2Label.textContent);
+    }
+
+    function loop(now){ if(!lastTime) lastTime=now; const dt=now-lastTime; lastTime=now; if(running) update(dt); draw(); requestAnimationFrame(loop); }
+    requestAnimationFrame(loop);
+
+    startBtn.addEventListener('click', ()=> startRound());
+    resetBtn.addEventListener('click', ()=>{ p1.score=p2.score=0; score1El.textContent='0'; score2El.textContent='0'; oni=1; round=1; roundEl.textContent='1'; oniNameEl.textContent=''; resetPositions(); remaining=ROUND_SECONDS; timeEl.textContent=ROUND_SECONDS; startBtn.disabled=false; startBtn.textContent='スタート'; generateObstacles(); });
+
+    generateObstacles(); // 初回生成
+  </script>
+</body>
+</html>
